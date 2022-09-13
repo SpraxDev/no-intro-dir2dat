@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport"
+        content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+  <title>dir2dat | no-intro</title>
+
+  <style>
+      #datXml {
+          background-color: #eee;
+          white-space:      break-spaces;
+          padding:          1rem;
+          counter-reset:    line;
+      }
+
+      #datXml span {
+          counter-increment: line;
+      }
+
+      #datXml span:before {
+          content:             counter(line);
+          border-right:        1px solid #bbb;
+          padding:             0 .5em;
+          margin-right:        .5em;
+
+          -webkit-user-select: none;
+      }
+  </style>
+</head>
+<body>
+  <input id="fileUpload" type="file" multiple>
+
+  <p id="currentActivity"></p>
+  <div id="calculatedHashes"></div>
+  <pre id="datXml" style=""><span>&lt;datafile&gt;&lt;/datafile&gt;</span></pre>
+
+  <!-- TODO: Server assets locally instead from third-party CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/md5.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hash-wasm@4/dist/crc32.umd.min.js"></script>
+  <script>
+    const supported = (() => {
+      try {
+        if (typeof WebAssembly === 'object'
+            && typeof WebAssembly.instantiate === 'function') {
+          const module = new WebAssembly.Module(Uint8Array.of(0x0, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00));
+          if (module instanceof WebAssembly.Module)
+            return new WebAssembly.Instance(module) instanceof WebAssembly.Instance;
+        }
+      } catch (e) {
+      }
+      return false;
+    })();
+
+    console.log(supported ? 'WebAssembly is supported' : 'WebAssembly is not supported');
+  </script>
+  <script>
+    const fileInputElement = document.getElementById('fileUpload');
+    fileInputElement.onchange = async (event) => {
+      function appendHashToDom(algorithm, hash) {
+        const calculatedHashesElement = document.getElementById('calculatedHashes');
+        const hashElement = document.createElement('p');
+        hashElement.innerText = `${algorithm}: ${hash}`;
+        calculatedHashesElement.appendChild(hashElement);
+      }
+
+      function setActivity(text) {
+        const currentActivityElement = document.getElementById('currentActivity');
+        currentActivityElement.innerText = text;
+      }
+
+      const files = event.target.files;
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (!(file instanceof File)) {
+          console.error('Not a file:', file);
+          continue;
+        }
+
+        setActivity(`'Reading file '${file.name}'`);
+        const buffer = await file.arrayBuffer();
+
+        setActivity(`'${file.name}': Calculating CRC32...`);
+        const crc32 = await hashwasm.crc32(new Uint8Array(buffer));
+        appendHashToDom('CRC32', crc32);
+
+        setActivity(`'${file.name}': Calculating MD5...`);
+        const md5 = await hashwasm.md5(new Uint8Array(buffer));
+        appendHashToDom('MD5', md5);
+
+        setActivity(`'${file.name}': Calculating SHA1...`);
+        const sha1 = await createHash('SHA-1', buffer);
+        appendHashToDom('SHA1', sha1);
+
+        setActivity(`'${file.name}': Calculating SHA256...`);
+        const sha256 = await createHash('SHA-256', buffer);
+        appendHashToDom('SHA256', sha256);
+
+        setDataXmlElement(generateDatXml(file.name, file.size, crc32, md5, sha1, sha256));
+        setActivity(`'${file.name}': Done.`);
+      }
+    };
+
+    if (fileInputElement.files.length > 0) {
+      fileInputElement.onchange({target: fileInputElement});  // FIXME
+    }
+
+    async function createHash(algorithm, buffer) {
+      const hashBuffer = await crypto.subtle.digest(algorithm, buffer);
+      return Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function setDataXmlElement(text) {
+      document.getElementById('datXml').innerHTML = '';
+
+      for (const line of text.split('\n')) {
+        const lineElement = document.createElement('span');
+        lineElement.innerText = line;
+        document.getElementById('datXml').appendChild(lineElement);
+        document.getElementById('datXml').appendChild(document.createTextNode('\n'));
+      }
+    }
+
+    function generateDatXml(fileName, fileSizeBytes, crc32, md5, sha1, sha256) {
+      return `
+<datafile>
+    <header>
+    </header>
+    <machine name="${escapeForXml(fileName)}">
+        <description>${escapeForXml(fileName)}</description>
+        <rom name="${escapeForXml(fileName)}" size="${escapeForXml(fileSizeBytes)}" crc="${escapeForXml(crc32)}" md5="${escapeForXml(md5)}" sha1="${escapeForXml(sha1)}" sha256="${escapeForXml(sha256)}"/>
+    </machine>
+</datafile>
+`.trim();
+    }
+
+    function escapeForXml(text) {
+      return text.toString().replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&apos;');
+    }
+  </script>
+</body>
+</html>
